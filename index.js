@@ -2,10 +2,11 @@ import crypto from 'crypto';
 if (!globalThis.crypto) {
     globalThis.crypto = crypto;
 }
+
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import baileys from '@whiskeysockets/baileys';
-const { makeWASocket, useMultiFileAuthState } = baileys;
+const { makeWASocket, useMultiFileAuthState, DisconnectReason } = baileys;
 import axios from 'axios';
 import FormData from 'form-data';
 
@@ -51,8 +52,8 @@ async function postToFacebook(imageBuffer, caption) {
 
 // ২. হোয়াটসঅ্যাপ চ্যানেলে পোস্ট
 async function postToWhatsApp(waSock, imageBuffer, caption) {
-    if (!waChannelJid) {
-        console.log("⚠️ WA Channel JID missing, skipping WA post.");
+    if (!waChannelJid || !waSock) {
+        console.log("⚠️ WA Channel JID or Socket missing, skipping WA post.");
         return;
     }
     try {
@@ -70,14 +71,20 @@ async function postToWhatsApp(waSock, imageBuffer, caption) {
     }
 }
 
-// ৩. হোয়াটসঅ্যাপ কানেক্টর
-function connectWhatsApp() {
+// ৩. হোয়াটসঅ্যাপ কানেক্টর (ম্যাক্সিমাম ৩টি ট্রাই করবে)
+function connectWhatsApp(retryCount = 0) {
     return new Promise(async (resolve, reject) => {
+        if (retryCount >= 3) {
+            return reject(new Error("WhatsApp Failed to connect after 3 attempts. Proceeding without WA."));
+        }
         try {
             const { state, saveCreds } = await useMultiFileAuthState('./wa_session');
             const waSock = makeWASocket({
                 auth: state,
-                browser: ["Windows", "Chrome", "10.0"]
+                browser: ["Windows", "Chrome", "10.0"],
+                connectTimeoutMs: 20000,
+                defaultQueryTimeoutMs: 20000,
+                keepAliveIntervalMs: 10000
             });
 
             waSock.ev.on('creds.update', saveCreds);
@@ -89,11 +96,14 @@ function connectWhatsApp() {
                     resolve(waSock);
                 } else if (connection === 'close') {
                     const statusCode = lastDisconnect?.error?.output?.statusCode;
-                    if (statusCode === 401) {
-                        reject(new Error("WA Session Invalid. Need to rescan."));
+                    console.log(`⚠️ WA Connection Closed (Status: ${statusCode}). Retrying ${retryCount + 1}/3...`);
+                    
+                    if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                        reject(new Error("WA Session Logged Out / Invalid."));
                     } else {
-                        console.log("Reconnecting WhatsApp...");
-                        connectWhatsApp().then(resolve).catch(reject);
+                        setTimeout(() => {
+                            connectWhatsApp(retryCount + 1).then(resolve).catch(reject);
+                        }, 3000);
                     }
                 }
             });
@@ -117,7 +127,7 @@ async function main() {
     try {
         waSock = await connectWhatsApp();
     } catch (e) {
-        console.error("❌ WhatsApp Error:", e.message);
+        console.error("❌ WhatsApp Skip:", e.message);
     }
 
     const oneHourAgo = Math.floor((Date.now() - 60 * 60 * 1000) / 1000);
@@ -141,7 +151,10 @@ async function main() {
 
                     const caption = msg.message || "";
 
+                    // ফেসবুকে পোস্ট
                     await postToFacebook(imageBuffer, caption);
+
+                    // হোয়াটসঅ্যাপে পোস্ট
                     if (waSock) {
                         await postToWhatsApp(waSock, imageBuffer, caption);
                     }
