@@ -1,3 +1,7 @@
+import crypto from 'crypto';
+if (!globalThis.crypto) {
+    globalThis.crypto = crypto;
+}
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import baileys from '@whiskeysockets/baileys';
