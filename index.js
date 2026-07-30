@@ -9,6 +9,7 @@ import baileys from '@whiskeysockets/baileys';
 const { makeWASocket, useMultiFileAuthState, DisconnectReason } = baileys;
 import axios from 'axios';
 import FormData from 'form-data';
+import fs from 'fs';
 
 // Environment Variables
 const apiId = parseInt(process.env.TELEGRAM_API_ID);
@@ -20,7 +21,30 @@ const fbPageId = process.env.FB_PAGE_ID;
 const fbAccessToken = process.env.FB_PAGE_ACCESS_TOKEN;
 const waChannelJid = process.env.WA_CHANNEL_JID;
 
-// ১. ফেসবুক পেজে পোস্ট
+const LAST_IDS_FILE = './last_ids.json';
+
+// ১. শেষ ফরোয়ার্ড করা মেসেজের ID ট্র্যাক রাখার ফাংশন
+function getLastProcessedIds() {
+    try {
+        if (fs.existsSync(LAST_IDS_FILE)) {
+            const data = fs.readFileSync(LAST_IDS_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (e) {
+        console.error("Error reading last_ids.json:", e.message);
+    }
+    return {};
+}
+
+function saveLastProcessedIds(ids) {
+    try {
+        fs.writeFileSync(LAST_IDS_FILE, JSON.stringify(ids, null, 2));
+    } catch (e) {
+        console.error("Error saving last_ids.json:", e.message);
+    }
+}
+
+// ২. ফেসবুক পেজে পোস্ট
 async function postToFacebook(imageBuffer, caption) {
     if (!fbPageId || !fbAccessToken) {
         console.log("⚠️ Facebook Credentials missing, skipping FB post.");
@@ -50,28 +74,7 @@ async function postToFacebook(imageBuffer, caption) {
     }
 }
 
-// ২. হোয়াটসঅ্যাপ চ্যানেলে পোস্ট
-async function postToWhatsApp(waSock, imageBuffer, caption) {
-    if (!waChannelJid || !waSock) {
-        console.log("⚠️ WA Channel JID or Socket missing, skipping WA post.");
-        return;
-    }
-    try {
-        if (imageBuffer) {
-            await waSock.sendMessage(waChannelJid, {
-                image: imageBuffer,
-                caption: caption
-            });
-        } else {
-            await waSock.sendMessage(waChannelJid, { text: caption });
-        }
-        console.log('✅ WA Channel: Posted Successfully!');
-    } catch (err) {
-        console.error('❌ WA Channel Error:', err.message);
-    }
-}
-
-// ৩. হোয়াটসঅ্যাপ কানেক্টর (ম্যাক্সিমাম ৩টি ট্রাই করবে)
+// ৩. হোয়াটসঅ্যাপ কানেক্টর
 function connectWhatsApp(retryCount = 0) {
     return new Promise(async (resolve, reject) => {
         if (retryCount >= 3) {
@@ -96,8 +99,6 @@ function connectWhatsApp(retryCount = 0) {
                     resolve(waSock);
                 } else if (connection === 'close') {
                     const statusCode = lastDisconnect?.error?.output?.statusCode;
-                    console.log(`⚠️ WA Connection Closed (Status: ${statusCode}). Retrying ${retryCount + 1}/3...`);
-                    
                     if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
                         reject(new Error("WA Session Logged Out / Invalid."));
                     } else {
@@ -130,20 +131,27 @@ async function main() {
         console.error("❌ WhatsApp Skip:", e.message);
     }
 
-    const oneHourAgo = Math.floor((Date.now() - 60 * 60 * 1000) / 1000);
-    let newPostsFound = 0;
+    const lastIds = getLastProcessedIds();
+    let totalNewPosts = 0;
 
     for (const botUsername of targetBots) {
         if (!botUsername) continue;
         try {
             console.log(`🔍 Checking ${botUsername}...`);
-            const messages = await tgClient.getMessages(botUsername, { limit: 3 });
+            const lastMsgId = lastIds[botUsername] || 0;
+            
+            // সর্বশেষ ৫টি মেসেজ আনা হচ্ছে
+            const messages = await tgClient.getMessages(botUsername, { limit: 5 });
+            
+            // মেসেজগুলো পুরনো থেকে নতুন ক্রমানুসারে প্রসেস করা হবে
+            const newMessages = messages
+                .filter(msg => msg.id > lastMsgId)
+                .sort((a, b) => a.id - b.id);
 
-            for (const msg of messages) {
-                if (msg.date > oneHourAgo) {
-                    console.log(`📩 New message found from ${botUsername}!`);
-                    newPostsFound++;
+            if (newMessages.length > 0) {
+                console.log(`📩 Found ${newMessages.length} unforwarded message(s) from ${botUsername}!`);
 
+                for (const msg of newMessages) {
                     let imageBuffer = null;
                     if (msg.media) {
                         imageBuffer = await tgClient.downloadMedia(msg.media);
@@ -155,21 +163,40 @@ async function main() {
                     await postToFacebook(imageBuffer, caption);
 
                     // হোয়াটসঅ্যাপে পোস্ট
-                    if (waSock) {
-                        await postToWhatsApp(waSock, imageBuffer, caption);
+                    if (waSock && waChannelJid) {
+                        try {
+                            if (imageBuffer) {
+                                await waSock.sendMessage(waChannelJid, { image: imageBuffer, caption: caption });
+                            } else {
+                                await waSock.sendMessage(waChannelJid, { text: caption });
+                            }
+                            console.log('✅ WA Channel: Posted Successfully!');
+                        } catch (e) {
+                            console.error('❌ WA Error:', e.message);
+                        }
                     }
+
+                    // লাস্ট মেসেজ ID আপডেট করা
+                    lastIds[botUsername] = msg.id;
+                    totalNewPosts++;
                 }
+            } else {
+                console.log(`ℹ️ No new unforwarded messages from ${botUsername}.`);
             }
         } catch (e) {
             console.error(`Error reading ${botUsername}:`, e.message);
         }
     }
 
-    if (newPostsFound === 0) {
-        console.log("ℹ️ No new messages in the last hour.");
+    // স্টেট সেভ করা
+    saveLastProcessedIds(lastIds);
+
+    if (totalNewPosts === 0) {
+        console.log("ℹ️ No new messages found to forward.");
+    } else {
+        console.log(`🎉 Total ${totalNewPosts} new message(s) forwarded successfully!`);
     }
 
-    console.log("🎉 Execution finished!");
     process.exit(0);
 }
 
