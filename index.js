@@ -1,8 +1,9 @@
-const { TelegramClient } = require('telegram');
-const { StringSession } = require('telegram/sessions');
-const { makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const axios = require('axios');
-const FormData = require('form-data');
+import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions/index.js';
+import baileys from '@whiskeysockets/baileys';
+const { makeWASocket, useMultiFileAuthState } = baileys;
+import axios from 'axios';
+import FormData from 'form-data';
 
 // Environment Variables
 const apiId = parseInt(process.env.TELEGRAM_API_ID);
@@ -68,29 +69,33 @@ async function postToWhatsApp(waSock, imageBuffer, caption) {
 // ৩. হোয়াটসঅ্যাপ কানেক্টর
 function connectWhatsApp() {
     return new Promise(async (resolve, reject) => {
-        const { state, saveCreds } = await useMultiFileAuthState('./wa_session');
-        const waSock = makeWASocket({
-            auth: state,
-            browser: ["Windows", "Chrome", "10.0"]
-        });
+        try {
+            const { state, saveCreds } = await useMultiFileAuthState('./wa_session');
+            const waSock = makeWASocket({
+                auth: state,
+                browser: ["Windows", "Chrome", "10.0"]
+            });
 
-        waSock.ev.on('creds.update', saveCreds);
+            waSock.ev.on('creds.update', saveCreds);
 
-        waSock.ev.on('connection.update', (update) => {
-            const { connection, lastDisconnect } = update;
-            if (connection === 'open') {
-                console.log('✅ WhatsApp Authenticated!');
-                resolve(waSock);
-            } else if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                if (statusCode === 401) {
-                    reject(new Error("WA Session Invalid. Need to rescan."));
-                } else {
-                    console.log("Reconnecting WhatsApp...");
-                    connectWhatsApp().then(resolve).catch(reject);
+            waSock.ev.on('connection.update', (update) => {
+                const { connection, lastDisconnect } = update;
+                if (connection === 'open') {
+                    console.log('✅ WhatsApp Authenticated!');
+                    resolve(waSock);
+                } else if (connection === 'close') {
+                    const statusCode = lastDisconnect?.error?.output?.statusCode;
+                    if (statusCode === 401) {
+                        reject(new Error("WA Session Invalid. Need to rescan."));
+                    } else {
+                        console.log("Reconnecting WhatsApp...");
+                        connectWhatsApp().then(resolve).catch(reject);
+                    }
                 }
-            }
-        });
+            });
+        } catch (e) {
+            reject(e);
+        }
     });
 }
 
