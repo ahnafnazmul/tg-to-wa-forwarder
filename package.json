@@ -1,28 +1,17 @@
 {
   "name": "tg-to-wa-forwarder",
   "version": "1.0.0",
-  "description": "",
+  "description": "Forward Telegram Bot updates to Facebook Page and WhatsApp Channel",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ahnafnazmul/tg-to-wa-forwarder.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/ahnafnazmul/tg-to-wa-forwarder/issues"
-  },
-  "homepage": "https://github.com/ahnafnazmul/tg-to-wa-forwarder#readme",
   "dependencies": {
-    "@whiskeysockets/baileys": "^7.0.0-rc14",
-    "dotenv": "^17.4.2",
-    "input": "^1.0.1",
-    "qrcode-terminal": "^0.12.0",
-    "telegram": "^2.26.22"
+    "@whiskeysockets/baileys": "^6.6.0",
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5",
+    "form-data": "^4.0.0",
+    "telegram": "^2.22.2"
   }
 }
